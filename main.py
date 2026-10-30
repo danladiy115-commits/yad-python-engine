@@ -1,13 +1,15 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from docx import Document
+from calculations import calculate_rsa
 import fitz
 import io
 import zipfile
 
 app = FastAPI(
     title="YAD Documents Corrector Python Engine",
-    version="0.1.0"
+    version="0.2.0"
 )
 
 app.add_middleware(
@@ -20,6 +22,10 @@ app.add_middleware(
 
 MAX_FILE_SIZE = 25 * 1024 * 1024
 
+
+# -----------------------------
+# ROOT AND HEALTH CHECK
+# -----------------------------
 
 @app.get("/")
 def root():
@@ -38,6 +44,10 @@ def health():
     }
 
 
+# -----------------------------
+# UPLOAD VALIDATION
+# -----------------------------
+
 async def read_upload(upload):
     data = await upload.read()
 
@@ -49,6 +59,10 @@ async def read_upload(upload):
 
     return data
 
+
+# -----------------------------
+# DOCUMENT ANALYSIS
+# -----------------------------
 
 @app.post("/api/analyze")
 async def analyze_document(file: UploadFile = File(...)):
@@ -114,6 +128,10 @@ async def analyze_document(file: UploadFile = File(...)):
         )
 
 
+# -----------------------------
+# ZIP INSPECTION
+# -----------------------------
+
 @app.post("/api/zip/check")
 async def check_zip(file: UploadFile = File(...)):
     if not (file.filename or "").lower().endswith(".zip"):
@@ -140,3 +158,30 @@ async def check_zip(file: UploadFile = File(...)):
 
     except zipfile.BadZipFile:
         raise HTTPException(400, "Invalid ZIP file.")
+
+
+# -----------------------------
+# RSA AND MORTGAGE CALCULATIONS
+# -----------------------------
+
+class CalculationRequest(BaseModel):
+    rsa_balance: str
+    dob: str
+    calculation_year: int = 2026
+
+
+@app.post("/api/calculate")
+def calculate_documents(request: CalculationRequest):
+    try:
+        return calculate_rsa(
+            balance=request.rsa_balance,
+            dob=request.dob,
+            calculation_year=request.calculation_year
+        )
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=str(error)
+        )
+        
