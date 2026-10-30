@@ -184,4 +184,111 @@ def calculate_documents(request: CalculationRequest):
             status_code=400,
             detail=str(error)
         )
+class BatchDocument(BaseModel):
+    name: str
+    base64: str
+
+
+class BatchAnalysisRequest(BaseModel):
+    documents: list[BatchDocument]
+
+
+@app.post("/api/analyze/batch")
+def analyze_batch(request: BatchAnalysisRequest):
+    import base64
+    import binascii
+
+    if not request.documents:
+        raise HTTPException(400, "Upload at least one document.")
+
+    if len(request.documents) > 30:
+        raise HTTPException(413, "Maximum 30 documents per batch.")
+
+    results = []
+    total_size = 0
+
+    for item in request.documents:
+        try:
+            raw = base64.b64decode(item.base64, validate=True)
+        except (ValueError, binascii.Error):
+            raise HTTPException(400, f"Invalid file data: {item.name}")
+
+        total_size += len(raw)
+
+        if not raw:
+            raise HTTPException(400, f"Empty file: {item.name}")
+
+        if total_size > 25 * 1024 * 1024:
+            raise HTTPException(413, "Combined files exceed 25 MB.")
+
+        try:
+            if item.name.lower().endswith(".docx"):
+                doc = Document(io.BytesIO(raw))
+
+                paragraphs = [
+                    p.text.strip()
+                    for p in doc.paragraphs
+                    if p.text.strip()
+                ]
+
+                tables = [
+                    [cell.text.strip() for cell in row.cells]
+                    for table in doc.tables
+                    for row in table.rows
+                ]
+
+                text_content = "\n".join(
+                    paragraphs +
+                    [" | ".join(row) for row in tables]
+                )
+
+                results.append({
+                    "filename": item.name,
+                    "file_type": "docx",
+                    "paragraph_count": len(paragraphs),
+                    "table_count": len(doc.tables),
+                    "word_count": len(text_content.split()),
+                    "text_preview": text_content[:2500],
+                    "status": "success"
+                })
+
+            elif item.name.lower().endswith(".pdf"):
+                pdf = fitz.open(
+                    stream=raw,
+                    filetype="pdf"
+                )
+
+                text_content = "\n".join(
+                    page.get_text("text")
+                    for page in pdf
+                )
+
+                results.append({
+                    "filename": item.name,
+                    "file_type": "pdf",
+                    "page_count": len(pdf),
+                    "word_count": len(text_content.split()),
+                    "text_preview": text_content[:2500],
+                    "status": "success"
+                })
+
+            else:
+                results.append({
+                    "filename": item.name,
+                    "status": "unsupported"
+                })
+
+        except Exception:
+            results.append({
+                "filename": item.name,
+                "status": "failed",
+                "message": "Could not read this document."
+            })
+
+    return {
+        "service": "yad-python-engine",
+        "document_count": len(results),
+        "results": results
+    }
+    
         
