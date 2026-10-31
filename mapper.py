@@ -7,90 +7,211 @@ from lxml import etree
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS = {"w": W}
-XML_PARSER = etree.XMLParser(
+
+PARSER = etree.XMLParser(
     resolve_entities=False,
     no_network=True,
     recover=False
 )
 
-CUES = {
+# Field labels and their common variations
+FIELD_LABELS = {
     "customer_name": [
-        r"\b(?:applicant|customer|client|member|subscriber|buyer|borrower|mortgagor|life assured|policyholder|rsa holder|account name)\b",
-        r"\b(?:offered to|issued to|in favour of|on behalf of|name of subscriber)\b",
-        r"\b(?:property offered to|confirmation for|application from)\b",
+        r"customer\s+name",
+        r"applicant(?:'s)?\s+name",
+        r"borrower(?:'s)?\s+name",
+        r"subscriber(?:'s)?\s+name",
+        r"name\s+of\s+subscriber",
+        r"policy\s*holder",
+        r"life\s+assured",
+        r"mortgagor",
+        r"buyer(?:'s)?\s+name",
+        r"rsa\s+holder",
+        r"account\s+name",
+        r"offered\s+to",
+        r"in\s+favour\s+of",
     ],
     "rsa_pin": [
-        r"\brsa\s*(?:pin|number|no\.?)\b",
-        r"\bpension\s*(?:pin|number)\b"
+        r"rsa\s*(?:pin|number|no\.?)",
+        r"pension\s*(?:pin|number|no\.?)",
+        r"pen(?:sion)?\s*pin",
     ],
     "dob": [
-        r"\b(?:date of birth|dob|born on)\b"
+        r"date\s+of\s+birth",
+        r"\bdob\b",
+        r"born\s+on",
+        r"birth\s+date",
     ],
     "employer": [
-        r"\b(?:employer|place of work|employment address|employer's address)\b"
+        r"employer(?:'s)?(?:\s+name)?",
+        r"place\s+of\s+work",
+        r"employment\s+address",
+        r"employer\s+address",
+        r"name\s+of\s+employer",
     ],
-    "account": [
-        r"\b(?:customer|applicant|mortgage)\s+account\b",
-        r"\bnuban\b"
+    "account_number": [
+        r"nuban",
+        r"account\s*(?:number|no\.?)",
+        r"mortgage\s+account",
+        r"customer\s+account",
     ],
-    "financial": [
-        r"\b(?:loan amount|equity contribution|rsa balance|sum assured|purchase price|sale value|market value|forced sale value|monthly repayment|premium|admin(?:istration)? charges)\b"
+    "rsa_balance": [
+        r"rsa\s+balance",
+        r"retirement\s+savings\s+account\s+balance",
+        r"pension\s+balance",
+        r"balance\s+in\s+(?:your\s+)?rsa",
+    ],
+    "equity_contribution": [
+        r"equity\s+contribution",
+        r"25\s*%\s*(?:rsa|equity)",
+        r"rsa\s+equity",
+        r"retirement\s+savings",
+    ],
+    "loan_amount": [
+        r"loan\s+amount",
+        r"amount\s+of\s+loan",
+        r"mortgage\s+loan",
+        r"loan\s+sum",
+    ],
+    "property_value": [
+        r"property\s+amount",
+        r"purchase\s+price",
+        r"sum\s+insured",
+        r"fair\s+market\s+value",
+        r"market\s+value",
+        r"sale\s+value",
+        r"value\s+of\s+property",
+    ],
+    "forced_sale_value": [
+        r"forced\s+sale\s+value",
+        r"forced\s+sale",
+        r"fsv",
+    ],
+    "admin_charges": [
+        r"administration\s+charges",
+        r"admin(?:istration)?\s+charges",
+        r"processing\s+charges",
+        r"admin\s+fee",
+    ],
+    "kbl_premium": [
+        r"kbl\s+premium",
+        r"kbl",
+    ],
+    "credit_life_premium": [
+        r"credit\s+life\s+premium",
+        r"life\s+insurance\s+premium",
+    ],
+    "monthly_repayment": [
+        r"monthly\s+repayment",
+        r"monthly\s+installment",
+        r"monthly\s+instalment",
+        r"monthly\s+payment",
+    ],
+    "tenure": [
+        r"loan\s+tenure",
+        r"tenure",
+        r"repayment\s+period",
+        r"policy\s+tenor",
     ],
 }
 
-UPPER_TOKEN_RE = re.compile(
-    r"\b[A-Z][A-Z'’.-]{1,}\b"
-)
-
-NAME_STOP_WORDS = {
-    "DATE", "BIRTH", "LIFE", "ASSURED", "RELATIONSHIP",
-    "BENEFICIARY", "WITH", "THE", "OF", "NAME",
-    "SUBSCRIBER", "INSURANCE", "LIMITED", "PROPERTY",
-    "OFFER", "OFFERED", "TITLE", "DOCUMENT",
-    "CONFIRMATION", "BEDROOM", "BLOCK", "FLAT",
-    "CADASTRAL", "ZONE", "GARDEN", "ESTATE",
-    "PLOT", "DISTRICT", "FCT", "ABUJA", "KNOWN",
-    "AS", "LEGAL", "DOCUMENTATION", "MONEY", "PAID",
-    "NSIA", "ADAMAWA", "MORTGAGE", "BANK", "IN",
-    "FAVOUR", "AT", "JAITE", "D28", "RSA", "HOLDER",
-}
-
-PIN_RE = re.compile(
-    r"\b[A-Z]{2,8}\d{6,16}\b",
+DATE_RE = re.compile(
+    r"\b(?:"
+    r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}"
+    r"|"
+    r"\d{4}-\d{2}-\d{2}"
+    r"|"
+    r"\d{1,2}(?:st|nd|rd|th)?\s+"
+    r"[A-Za-z]+\s*,?\s+\d{4}"
+    r"|"
+    r"[A-Za-z]+\s+\d{1,2},?\s+\d{4}"
+    r")\b",
     re.I
 )
 
-DATE_RE = re.compile(
-    r"\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|"
-    r"\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+\s*,?\s+\d{4}|"
-    r"\d{4}-\d{2}-\d{2})\b",
+PIN_RE = re.compile(
+    r"\b(?:PEN|RSA|PFA)?[A-Z]{0,4}\d{8,16}\b",
     re.I
 )
 
 ACCOUNT_RE = re.compile(r"\b\d{10}\b")
 
 MONEY_RE = re.compile(
-    r"(?:₦|N(?:GN)?\s*)(?=\d)[\d,]+(?:\.\d{1,2})?",
+    r"(?:₦|= ?N|NGN|N)\s*"
+    r"[\d,]+(?:\.\d{1,2})?",
     re.I
 )
 
+UPPER_NAME_RE = re.compile(
+    r"\b[A-Z][A-Z'’.-]+"
+    r"(?:\s+[A-Z][A-Z'’.-]+){1,5}\b"
+)
 
-def _paragraph_text(paragraph):
-    return "".join(
-        node.text or ""
-        for node in paragraph.xpath(".//w:t", namespaces=NS)
+STOP_NAMES = {
+    "ADAMAWA MORTGAGE BANK",
+    "ADAMAWA MORTGAGE BANK LIMITED",
+    "NSIA INSURANCE LIMITED",
+    "VICTOR ENYINNAYA ASSOCIATES",
+    "LEADWAY PENSURE",
+    "FEDERAL REPUBLIC OF NIGERIA",
+    "INTERNATIONAL COMMITTEE OF THE RED CROSS",
+}
+
+ROLE_KEYWORDS = {
+    "insurer": [
+        "insurance", "insurer", "policy", "underwriter",
+        "nsia"
+    ],
+    "bank": [
+        "mortgage bank", "bank limited", "bank account"
+    ],
+    "valuer": [
+        "valuation", "valuer", "estate surveyor",
+        "consultant", "valuation report"
+    ],
+    "solicitor": [
+        "solicitor", "legal practitioner", "law firm",
+        "legal search"
+    ],
+    "property": [
+        "property", "plot", "estate", "flat",
+        "cadastral", "district"
+    ],
+}
+
+
+def clean_text(value):
+    return re.sub(
+        r"\s+",
+        " ",
+        value or ""
     ).strip()
 
 
-def _extract_docx_records(data):
+def paragraph_text(node):
+    return "".join(
+        item.text or ""
+        for item in node.xpath(
+            ".//w:t",
+            namespaces=NS
+        )
+    ).strip()
+
+
+def get_document_records(data):
+
     records = []
 
-    with zipfile.ZipFile(io.BytesIO(data), "r") as archive:
+    with zipfile.ZipFile(
+        io.BytesIO(data),
+        "r"
+    ) as archive:
+
         names = archive.namelist()
 
         if "word/document.xml" not in names:
             raise ValueError(
-                "DOCX main document part is missing."
+                "DOCX main document XML is missing."
             )
 
         for part in names:
@@ -104,120 +225,379 @@ def _extract_docx_records(data):
             try:
                 root = etree.fromstring(
                     archive.read(part),
-                    parser=XML_PARSER
+                    parser=PARSER
                 )
 
             except etree.XMLSyntaxError:
-                records.append({
-                    "part": part,
-                    "text": "",
-                    "warning": "An XML part could not be parsed."
-                })
                 continue
 
-            for paragraph in root.xpath(
+            for node in root.xpath(
                 "//w:p",
                 namespaces=NS
             ):
-                value = _paragraph_text(paragraph)
 
-                if value:
-                    records.append({
-                        "part": part,
-                        "text": value
-                    })
+                value = clean_text(
+                    paragraph_text(node)
+                )
+
+                if not value:
+                    continue
+
+                row = node.xpath(
+                    "ancestor::w:tr[1]",
+                    namespaces=NS
+                )
+
+                row_text = ""
+
+                if row:
+                    cells = row[0].xpath(
+                        ".//w:tc",
+                        namespaces=NS
+                    )
+
+                    row_text = " | ".join(
+                        clean_text(
+                            " ".join(
+                                paragraph_text(p)
+                                for p in cell.xpath(
+                                    ".//w:p",
+                                    namespaces=NS
+                                )
+                            )
+                        )
+                        for cell in cells
+                    )
+
+                records.append({
+                    "part": part,
+                    "text": value,
+                    "row": row_text,
+                })
 
     return records
 
 
-def _matching_cues(text):
-    return [
-        field
-        for field, patterns in CUES.items()
-        if any(
-            re.search(pattern, text, re.I)
-            for pattern in patterns
+def classify_document(filename, records):
+
+    text = " ".join(
+        item["text"]
+        for item in records[:100]
+    ).lower()
+
+    name = filename.lower()
+
+    if "policy" in name or "insurance" in text:
+        return "insurance_document"
+
+    if "valuation" in name or "valuation report" in text:
+        return "valuation_document"
+
+    if "legal" in name or "legal search" in text:
+        return "legal_document"
+
+    if "inspection" in name:
+        return "inspection_document"
+
+    if "verification" in name:
+        return "property_verification"
+
+    if "disbursement" in name:
+        return "disbursement_document"
+
+    if "offer" in name:
+        return "offer_document"
+
+    if "account" in name or "statement of account" in text:
+        return "bank_account_document"
+
+    if "indemnity" in name:
+        return "indemnity_document"
+
+    return "general_document"
+
+
+def classify_context(text):
+
+    lowered = text.lower()
+
+    roles = []
+
+    for role, words in ROLE_KEYWORDS.items():
+
+        if any(word in lowered for word in words):
+            roles.append(role)
+
+    return roles
+
+
+def nearby_context(records, index, radius=2):
+
+    start = max(0, index - radius)
+    end = min(len(records), index + radius + 1)
+
+    return " ".join(
+        records[i]["text"]
+        for i in range(start, end)
+    )
+
+
+def extract_labelled_value(records, index, field):
+
+    current = records[index]["text"]
+    row = records[index]["row"]
+
+    combined = current
+
+    if row:
+        combined += " | " + row
+
+    patterns = FIELD_LABELS[field]
+
+    for pattern in patterns:
+
+        match = re.search(
+            pattern,
+            combined,
+            re.I
         )
-    ]
 
+        if not match:
+            continue
 
-def _candidate_values(field, text):
+        remainder = combined[match.end():]
 
-    if field == "customer_name":
-
-        tokens = list(
-            UPPER_TOKEN_RE.finditer(text)
+        remainder = re.sub(
+            r"^[\s:=#|/-]+",
+            "",
+            remainder
         )
 
-        values = []
-        group = []
+        if not remainder:
+            continue
 
-        for match in tokens:
+        # Stop before another likely label.
+        remainder = re.split(
+            r"\s+(?:DATE OF BIRTH|ADDRESS|"
+            r"EMPLOYER|RSA PIN|NUBAN|"
+            r"LOAN AMOUNT|EQUITY CONTRIBUTION|"
+            r"PURCHASE PRICE|SUM ASSURED)\s*[:#=]?",
+            remainder,
+            maxsplit=1,
+            flags=re.I
+        )[0]
 
-            word = match.group(0)
+        remainder = clean_text(remainder)
 
-            if word.upper() in NAME_STOP_WORDS:
+        if remainder:
+            return remainder[:180]
 
-                if len(group) >= 2:
-                    values.append(
-                        " ".join(x.group(0) for x in group)
+    # Look at adjacent paragraphs when label and value
+    # are separated in the document.
+    if index + 1 < len(records):
+
+        next_text = records[index + 1]["text"]
+
+        if len(next_text) <= 180:
+            return next_text
+
+    return None
+
+
+def extract_candidates(records):
+
+    grouped = defaultdict(list)
+
+    for index, record in enumerate(records):
+
+        current = record["text"]
+        combined = current
+
+        if record["row"]:
+            combined += " | " + record["row"]
+
+        context = nearby_context(
+            records,
+            index
+        )
+
+        for field, patterns in FIELD_LABELS.items():
+
+            for pattern in patterns:
+
+                if not re.search(
+                    pattern,
+                    combined,
+                    re.I
+                ):
+                    continue
+
+                value = extract_labelled_value(
+                    records,
+                    index,
+                    field
+                )
+
+                if not value:
+                    continue
+
+                if field == "rsa_pin":
+
+                    matches = PIN_RE.findall(
+                        combined + " " + context
                     )
 
-                group = []
+                    if matches:
+                        value = matches[0]
 
-            else:
+                elif field == "dob":
 
-                if group and text[
-                    group[-1].end():match.start()
-                ].strip():
-
-                    if len(group) >= 2:
-                        values.append(
-                            " ".join(x.group(0) for x in group)
-                        )
-
-                    group = []
-
-                group.append(match)
-
-                if len(group) == 5:
-                    values.append(
-                        " ".join(x.group(0) for x in group)
+                    matches = DATE_RE.findall(
+                        combined + " " + context
                     )
-                    group = []
 
-        if len(group) >= 2:
-            values.append(
-                " ".join(x.group(0) for x in group)
+                    if matches:
+                        value = matches[0]
+
+                elif field == "account_number":
+
+                    matches = ACCOUNT_RE.findall(
+                        combined + " " + context
+                    )
+
+                    if matches:
+                        value = matches[0]
+
+                elif field in {
+                    "rsa_balance",
+                    "equity_contribution",
+                    "loan_amount",
+                    "property_value",
+                    "forced_sale_value",
+                    "admin_charges",
+                    "kbl_premium",
+                    "credit_life_premium",
+                    "monthly_repayment",
+                }:
+
+                    matches = MONEY_RE.findall(
+                        combined + " " + context
+                    )
+
+                    if matches:
+                        value = matches[0]
+
+                value = clean_text(value)
+
+                if not value:
+                    continue
+
+                key = (field, value.casefold())
+
+                grouped[key].append({
+                    "value": value,
+                    "part": record["part"],
+                    "context": context[:900],
+                    "row": record["row"][:500],
+                    "label_text": current[:300],
+                    "roles": classify_context(context),
+                    "method": (
+                        "label_and_nearby_context"
+                    )
+                })
+
+                break
+
+    candidates = []
+
+    for (field, _), evidence in grouped.items():
+
+        unique_evidence = []
+        seen = set()
+
+        for item in evidence:
+
+            key = (
+                item["part"],
+                item["label_text"],
+                item["value"]
             )
 
-        return list(dict.fromkeys(values))
+            if key not in seen:
+                seen.add(key)
+                unique_evidence.append(item)
 
-    if field == "rsa_pin":
-        return [
-            m.group(0)
-            for m in PIN_RE.finditer(text)
-        ]
+        candidates.append({
+            "field": field,
+            "value": unique_evidence[0]["value"],
+            "occurrences": len(unique_evidence),
+            "evidence": unique_evidence[:8],
+            "classification": "candidate_only",
+            "confidence": "review_required",
+            "requires_confirmation": True,
+        })
 
-    if field == "dob":
-        return [
-            m.group(0)
-            for m in DATE_RE.finditer(text)
-        ]
+    candidates.sort(
+        key=lambda item: (
+            item["field"],
+            item["value"].casefold()
+        )
+    )
 
-    if field == "account":
-        return [
-            m.group(0)
-            for m in ACCOUNT_RE.finditer(text)
-        ]
+    return candidates
 
-    if field == "financial":
-        return [
-            m.group(0)
-            for m in MONEY_RE.finditer(text)
-        ]
 
-    return []
+def extract_general_name_candidates(records):
+
+    found = defaultdict(list)
+
+    for index, record in enumerate(records):
+
+        context = nearby_context(
+            records,
+            index
+        )
+
+        for value in UPPER_NAME_RE.findall(
+            record["text"]
+        ):
+
+            cleaned = clean_text(value)
+
+            if cleaned in STOP_NAMES:
+                continue
+
+            if len(cleaned.split()) < 2:
+                continue
+
+            if any(
+                word in cleaned
+                for word in (
+                    "LIMITED",
+                    "ASSOCIATES",
+                    "INSURANCE",
+                    "MORTGAGE BANK",
+                )
+            ):
+                continue
+
+            found[cleaned.casefold()].append({
+                "value": cleaned,
+                "part": record["part"],
+                "context": context[:600],
+            })
+
+    return [
+        {
+            "value": items[0]["value"],
+            "occurrences": len(items),
+            "evidence": items[:5],
+            "classification": "unlabelled_name_candidate",
+            "confidence": "low",
+            "requires_confirmation": True,
+        }
+        for items in found.values()
+    ]
 
 
 def analyze_docx_mapping(data, filename):
@@ -228,113 +608,76 @@ def analyze_docx_mapping(data, filename):
         )
 
     try:
-        records = _extract_docx_records(data)
+
+        records = get_document_records(data)
 
     except zipfile.BadZipFile:
         raise ValueError(
-            "The uploaded file is not a valid DOCX package."
+            "Invalid DOCX package."
         )
 
-    grouped = defaultdict(
-        lambda: {
-            "count": 0,
-            "contexts": [],
-            "parts": set()
+    if not records:
+        return {
+            "filename": filename,
+            "status": "needs_review",
+            "paragraphs_examined": 0,
+            "document_type": "unknown",
+            "candidate_count": 0,
+            "candidates": [],
+            "warnings": [
+                "No editable text paragraphs were found.",
+                "The document may be scanned or image-based."
+            ]
         }
+
+    candidates = extract_candidates(records)
+
+    general_names = extract_general_name_candidates(
+        records
+    )
+
+    document_type = classify_document(
+        filename,
+        records
     )
 
     warnings = []
 
-    for record in records:
-
-        text = record["text"]
-
-        for field in _matching_cues(text):
-
-            if field == "employer":
-
-                key = (
-                    field,
-                    "[employer/address passage]"
-                )
-
-                grouped[key]["count"] += 1
-
-                if len(grouped[key]["contexts"]) < 5:
-                    grouped[key]["contexts"].append(
-                        text[:700]
-                    )
-
-                grouped[key]["parts"].add(
-                    record["part"]
-                )
-
-                continue
-
-            for value in _candidate_values(field, text):
-
-                key = (field, value)
-
-                grouped[key]["count"] += 1
-
-                if len(grouped[key]["contexts"]) < 5:
-                    grouped[key]["contexts"].append(
-                        text[:700]
-                    )
-
-                grouped[key]["parts"].add(
-                    record["part"]
-                )
-
-    candidates = []
-
-    for (field, value), item in grouped.items():
-
-        candidates.append({
-            "field": field,
-            "value": value,
-            "occurrences": item["count"],
-            "xml_parts": sorted(item["parts"]),
-            "contexts": item["contexts"],
-            "classification": "candidate_only",
-            "confidence": "review_required",
-        })
-
-    candidates.sort(
-        key=lambda x: (
-            x["field"],
-            x["value"].casefold()
-        )
-    )
-
-    if not records:
-        warnings.append(
-            "No editable text paragraphs were found."
-        )
-
     if not candidates:
         warnings.append(
-            "No contextual candidates were found. "
-            "The document may be scanned, image-based, "
-            "or use wording not yet covered by the context rules."
+            "No labelled field candidates were identified."
+        )
+
+    if not any(
+        item["field"] == "customer_name"
+        for item in candidates
+    ):
+        warnings.append(
+            "No confidently labelled customer-name candidate was found."
         )
 
     return {
         "filename": filename,
-        "status": (
-            "analysis_complete"
-            if records
-            else "needs_review"
-        ),
+        "status": "analysis_complete",
+        "document_type": document_type,
         "paragraphs_examined": len(records),
         "candidate_count": len(candidates),
         "candidates": candidates,
+        "unlabelled_name_candidates": general_names[:30],
         "warnings": warnings,
+        "safety": {
+            "documents_modified": False,
+            "automatic_replacement": False,
+            "all_candidates_require_review": True,
+            "official_signatures_and_seals_modified": False,
+        },
         "limitations": [
             "This is a contextual candidate map, not an approved replacement map.",
-            "Scanned or image-only content requires a separate OCR stage.",
-            "Amounts are not classified as customer balances without human review.",
-            "Bank, insurer, valuer, solicitor and other third-party details must be distinguished before correction.",
-            "Signatures, seals, policy identifiers and issuer certifications are not modified by this analysis stage."
+            "Scanned pages require OCR.",
+            "Adjacent paragraph matching may produce false candidates.",
+            "Bank, insurer, valuer, solicitor and customer roles require confirmation.",
+            "Financial values require classification review.",
+            "Policy numbers and issuer certifications are not replacement targets.",
         ],
-    }
+        }
+            
