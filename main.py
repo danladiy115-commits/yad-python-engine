@@ -1,15 +1,19 @@
+
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from docx import Document
 from calculations import calculate_rsa
+from mapper import analyze_docx_mapping
 import fitz
 import io
 import zipfile
+import base64
+import binascii
 
 app = FastAPI(
     title="YAD Documents Corrector Python Engine",
-    version="0.2.0"
+    version="0.3.0"
 )
 
 app.add_middleware(
@@ -21,11 +25,8 @@ app.add_middleware(
 )
 
 MAX_FILE_SIZE = 25 * 1024 * 1024
+MAX_BATCH_FILES = 30
 
-
-# -----------------------------
-# ROOT AND HEALTH CHECK
-# -----------------------------
 
 @app.get("/")
 def root():
@@ -40,51 +41,58 @@ def root():
 def health():
     return {
         "ok": True,
-        "service": "yad-python-engine"
+        "service": "yad-python-engine",
+        "version": app.version
     }
 
 
-# -----------------------------
-# UPLOAD VALIDATION
-# -----------------------------
-
 async def read_upload(upload):
+
     data = await upload.read()
 
     if not data:
-        raise HTTPException(400, "Uploaded file is empty.")
+        raise HTTPException(
+            400,
+            "Uploaded file is empty."
+        )
 
     if len(data) > MAX_FILE_SIZE:
-        raise HTTPException(413, "File exceeds 25 MB.")
+        raise HTTPException(
+            413,
+            "File exceeds 25 MB."
+        )
 
     return data
 
 
-# -----------------------------
-# DOCUMENT ANALYSIS
-# -----------------------------
-
 @app.post("/api/analyze")
-async def analyze_document(file: UploadFile = File(...)):
+async def analyze_document(
+    file: UploadFile = File(...)
+):
+
     filename = (file.filename or "").lower()
     data = await read_upload(file)
 
     try:
+
         if filename.endswith(".docx"):
+
             doc = Document(io.BytesIO(data))
 
             paragraphs = [
-                p.text for p in doc.paragraphs
+                p.text
+                for p in doc.paragraphs
                 if p.text.strip()
             ]
 
-            tables = []
-
-            for table in doc.tables:
-                for row in table.rows:
-                    tables.append([
-                        cell.text for cell in row.cells
-                    ])
+            tables = [
+                [
+                    cell.text
+                    for cell in row.cells
+                ]
+                for table in doc.tables
+                for row in table.rows
+            ]
 
             return {
                 "filename": file.filename,
@@ -96,6 +104,7 @@ async def analyze_document(file: UploadFile = File(...)):
             }
 
         if filename.endswith(".pdf"):
+
             pdf = fitz.open(
                 stream=data,
                 filetype="pdf"
@@ -128,19 +137,25 @@ async def analyze_document(file: UploadFile = File(...)):
         )
 
 
-# -----------------------------
-# ZIP INSPECTION
-# -----------------------------
-
 @app.post("/api/zip/check")
-async def check_zip(file: UploadFile = File(...)):
+async def check_zip(
+    file: UploadFile = File(...)
+):
+
     if not (file.filename or "").lower().endswith(".zip"):
-        raise HTTPException(415, "Please upload a ZIP file.")
+        raise HTTPException(
+            415,
+            "Please upload a ZIP file."
+        )
 
     data = await read_upload(file)
 
     try:
-        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+
+        with zipfile.ZipFile(
+            io.BytesIO(data)
+        ) as archive:
+
             names = [
                 item.filename
                 for item in archive.infolist()
@@ -157,12 +172,11 @@ async def check_zip(file: UploadFile = File(...)):
         }
 
     except zipfile.BadZipFile:
-        raise HTTPException(400, "Invalid ZIP file.")
+        raise HTTPException(
+            400,
+            "Invalid ZIP file."
+        )
 
-
-# -----------------------------
-# RSA AND MORTGAGE CALCULATIONS
-# -----------------------------
 
 class CalculationRequest(BaseModel):
     rsa_balance: str
@@ -171,8 +185,12 @@ class CalculationRequest(BaseModel):
 
 
 @app.post("/api/calculate")
-def calculate_documents(request: CalculationRequest):
+def calculate_documents(
+    request: CalculationRequest
+):
+
     try:
+
         return calculate_rsa(
             balance=request.rsa_balance,
             dob=request.dob,
@@ -180,10 +198,13 @@ def calculate_documents(request: CalculationRequest):
         )
 
     except ValueError as error:
+
         raise HTTPException(
-            status_code=400,
+            400,
             detail=str(error)
         )
+
+
 class BatchDocument(BaseModel):
     name: str
     base64: str
@@ -193,66 +214,97 @@ class BatchAnalysisRequest(BaseModel):
     documents: list[BatchDocument]
 
 
-@app.post("/api/analyze/batch")
-def analyze_batch(request: BatchAnalysisRequest):
-    import base64
-    import binascii
+def decode_batch_documents(documents):
 
-    if not request.documents:
-        raise HTTPException(400, "Upload at least one document.")
+    if not documents:
+        raise HTTPException(
+            400,
+            "Upload at least one document."
+        )
 
-    if len(request.documents) > 30:
-        raise HTTPException(413, "Maximum 30 documents per batch.")
+    if len(documents) > MAX_BATCH_FILES:
+        raise HTTPException(
+            413,
+            "Maximum 30 documents per batch."
+        )
 
-    results = []
     total_size = 0
+    decoded = []
 
-    for item in request.documents:
+    for item in documents:
+
         try:
-            raw = base64.b64decode(item.base64, validate=True)
+
+            raw = base64.b64decode(
+                item.base64,
+                validate=True
+            )
+
         except (ValueError, binascii.Error):
-            raise HTTPException(400, f"Invalid file data: {item.name}")
+
+            raise HTTPException(
+                400,
+                f"Invalid file data: {item.name}"
+            )
+
+        if not raw:
+            raise HTTPException(
+                400,
+                f"Empty file: {item.name}"
+            )
 
         total_size += len(raw)
 
-        if not raw:
-            raise HTTPException(400, f"Empty file: {item.name}")
+        if total_size > MAX_FILE_SIZE:
+            raise HTTPException(
+                413,
+                "Combined files exceed 25 MB."
+            )
 
-        if total_size > 25 * 1024 * 1024:
-            raise HTTPException(413, "Combined files exceed 25 MB.")
+        decoded.append(
+            (item.name, raw)
+        )
+
+    return decoded
+
+
+@app.post("/api/analyze/batch")
+def analyze_batch(
+    request: BatchAnalysisRequest
+):
+
+    decoded = decode_batch_documents(
+        request.documents
+    )
+
+    results = []
+
+    for name, raw in decoded:
 
         try:
-            if item.name.lower().endswith(".docx"):
-                doc = Document(io.BytesIO(raw))
 
-                paragraphs = [
-                    p.text.strip()
-                    for p in doc.paragraphs
-                    if p.text.strip()
-                ]
+            if name.lower().endswith(".docx"):
 
-                tables = [
-                    [cell.text.strip() for cell in row.cells]
-                    for table in doc.tables
-                    for row in table.rows
-                ]
-
-                text_content = "\n".join(
-                    paragraphs +
-                    [" | ".join(row) for row in tables]
+                report = analyze_docx_mapping(
+                    raw,
+                    name
                 )
 
                 results.append({
-                    "filename": item.name,
+                    "filename": name,
                     "file_type": "docx",
-                    "paragraph_count": len(paragraphs),
-                    "table_count": len(doc.tables),
-                    "word_count": len(text_content.split()),
-                    "text_preview": text_content[:2500],
-                    "status": "success"
+                    "word_count": sum(
+                        len(x["contexts"][0].split())
+                        for x in report["candidates"]
+                        if x["contexts"]
+                    ),
+                    "text_preview": "",
+                    "status": report["status"],
+                    "mapping_report": report
                 })
 
-            elif item.name.lower().endswith(".pdf"):
+            elif name.lower().endswith(".pdf"):
+
                 pdf = fitz.open(
                     stream=raw,
                     filetype="pdf"
@@ -264,163 +316,98 @@ def analyze_batch(request: BatchAnalysisRequest):
                 )
 
                 results.append({
-                    "filename": item.name,
+                    "filename": name,
                     "file_type": "pdf",
                     "page_count": len(pdf),
-                    "word_count": len(text_content.split()),
+                    "word_count": len(
+                        text_content.split()
+                    ),
                     "text_preview": text_content[:2500],
-                    "status": "success"
+                    "status": (
+                        "text_extracted"
+                        if text_content.strip()
+                        else "needs_ocr"
+                    ),
+                    "message": (
+                        "PDF text extraction only; "
+                        "OCR for scanned pages is not yet enabled."
+                    )
                 })
 
             else:
+
                 results.append({
-                    "filename": item.name,
+                    "filename": name,
                     "status": "unsupported"
                 })
 
-        except Exception:
+        except Exception as error:
+
             results.append({
-                "filename": item.name,
+                "filename": name,
                 "status": "failed",
-                "message": "Could not read this document."
-            })
-
-    return {
-        "service": "yad-python-engine",
-        "document_count": len(results),
-        "results": results
-    }
-    
-        
-# ==========================================
-# PYTHON DOCUMENT CORRECTION API
-# ==========================================
-
-import base64
-import binascii
-
-from corrector import correct_docx
-
-
-class CorrectionCustomer(BaseModel):
-    name: str
-    dob: str
-    employer_address: str
-    rsa_balance: str
-    rsa_pin: str
-    account_number: str
-    calculation_year: int = 2026
-
-
-class CorrectionDocument(BaseModel):
-    name: str
-    base64: str
-
-
-class BatchCorrectionRequest(BaseModel):
-    customer: CorrectionCustomer
-    documents: list[CorrectionDocument]
-
-
-@app.post("/api/correct/batch")
-def correct_documents_batch(request: BatchCorrectionRequest):
-
-    if not request.documents:
-        raise HTTPException(
-            400,
-            "Upload at least one DOCX document."
-        )
-
-    if len(request.documents) > 30:
-        raise HTTPException(
-            413,
-            "Maximum 30 documents per batch."
-        )
-
-    try:
-        calculations = calculate_rsa(
-            balance=request.customer.rsa_balance,
-            dob=request.customer.dob,
-            calculation_year=request.customer.calculation_year
-        )
-    except ValueError as error:
-        raise HTTPException(400, str(error))
-
-    customer = request.customer.model_dump()
-
-    results = []
-    total_size = 0
-
-    for item in request.documents:
-
-        if not item.name.lower().endswith(".docx"):
-            results.append({
-                "filename": item.name,
-                "status": "unsupported",
-                "message": "Only DOCX files can be corrected."
-            })
-            continue
-
-        try:
-            raw = base64.b64decode(
-                item.base64,
-                validate=True
-            )
-        except (ValueError, binascii.Error):
-            raise HTTPException(
-                400,
-                "Invalid file data: " + item.name
-            )
-
-        total_size += len(raw)
-
-        if not raw:
-            raise HTTPException(
-                400,
-                "Empty document: " + item.name
-            )
-
-        if total_size > MAX_FILE_SIZE:
-            raise HTTPException(
-                413,
-                "Combined documents exceed 25 MB."
-            )
-
-        try:
-            corrected_bytes, qc = correct_docx(
-                raw,
-                customer,
-                calculations
-            )
-
-            results.append({
-                "filename": item.name,
-                "status": qc["status"],
-                "corrected_base64": base64.b64encode(
-                    corrected_bytes
-                ).decode("ascii"),
-                "quality_check": qc
-            })
-
-        except (ValueError, KeyError) as error:
-            results.append({
-                "filename": item.name,
-                "status": "needs_review",
                 "message": str(error)
             })
 
-        except Exception:
+    return {
+        "service": "yad-python-engine",
+        "analysis_engine": "contextual-python-mapper",
+        "document_count": len(results),
+        "results": results
+    }
+
+
+@app.post("/api/map/batch")
+def map_batch(
+    request: BatchAnalysisRequest
+):
+
+    decoded = decode_batch_documents(
+        request.documents
+    )
+
+    results = []
+
+    for name, raw in decoded:
+
+        if not name.lower().endswith(".docx"):
+
             results.append({
-                "filename": item.name,
+                "filename": name,
+                "status": "unsupported",
+                "message": (
+                    "Contextual mapping currently "
+                    "supports DOCX only."
+                )
+            })
+
+            continue
+
+        try:
+
+            results.append(
+                analyze_docx_mapping(
+                    raw,
+                    name
+                )
+            )
+
+        except Exception as error:
+
+            results.append({
+                "filename": name,
                 "status": "failed",
-                "message": "Unexpected correction error."
+                "message": str(error)
             })
 
     return {
         "service": "yad-python-engine",
-        "calculation_engine": "python",
+        "operation": "contextual_mapping_only",
+        "documents_modified": False,
         "document_count": len(results),
-        "calculations": calculations,
         "results": results
-            }
-    
+    }
+
+
+# Correction is intentionally not wired to the mapping stage yet.
+# We will enable replacement only after mapping is validated.
