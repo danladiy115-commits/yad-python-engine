@@ -292,3 +292,135 @@ def analyze_batch(request: BatchAnalysisRequest):
     }
     
         
+# ==========================================
+# PYTHON DOCUMENT CORRECTION API
+# ==========================================
+
+import base64
+import binascii
+
+from corrector import correct_docx
+
+
+class CorrectionCustomer(BaseModel):
+    name: str
+    dob: str
+    employer_address: str
+    rsa_balance: str
+    rsa_pin: str
+    account_number: str
+    calculation_year: int = 2026
+
+
+class CorrectionDocument(BaseModel):
+    name: str
+    base64: str
+
+
+class BatchCorrectionRequest(BaseModel):
+    customer: CorrectionCustomer
+    documents: list[CorrectionDocument]
+
+
+@app.post("/api/correct/batch")
+def correct_documents_batch(request: BatchCorrectionRequest):
+
+    if not request.documents:
+        raise HTTPException(
+            400,
+            "Upload at least one DOCX document."
+        )
+
+    if len(request.documents) > 30:
+        raise HTTPException(
+            413,
+            "Maximum 30 documents per batch."
+        )
+
+    try:
+        calculations = calculate_rsa(
+            balance=request.customer.rsa_balance,
+            dob=request.customer.dob,
+            calculation_year=request.customer.calculation_year
+        )
+    except ValueError as error:
+        raise HTTPException(400, str(error))
+
+    customer = request.customer.model_dump()
+
+    results = []
+    total_size = 0
+
+    for item in request.documents:
+
+        if not item.name.lower().endswith(".docx"):
+            results.append({
+                "filename": item.name,
+                "status": "unsupported",
+                "message": "Only DOCX files can be corrected."
+            })
+            continue
+
+        try:
+            raw = base64.b64decode(
+                item.base64,
+                validate=True
+            )
+        except (ValueError, binascii.Error):
+            raise HTTPException(
+                400,
+                "Invalid file data: " + item.name
+            )
+
+        total_size += len(raw)
+
+        if not raw:
+            raise HTTPException(
+                400,
+                "Empty document: " + item.name
+            )
+
+        if total_size > MAX_FILE_SIZE:
+            raise HTTPException(
+                413,
+                "Combined documents exceed 25 MB."
+            )
+
+        try:
+            corrected_bytes, qc = correct_docx(
+                raw,
+                customer,
+                calculations
+            )
+
+            results.append({
+                "filename": item.name,
+                "status": qc["status"],
+                "corrected_base64": base64.b64encode(
+                    corrected_bytes
+                ).decode("ascii"),
+                "quality_check": qc
+            })
+
+        except (ValueError, KeyError) as error:
+            results.append({
+                "filename": item.name,
+                "status": "needs_review",
+                "message": str(error)
+            })
+
+        except Exception:
+            results.append({
+                "filename": item.name,
+                "status": "failed",
+                "message": "Unexpected correction error."
+            })
+
+    return {
+        "service": "yad-python-engine",
+        "calculation_engine": "python",
+        "document_count": len(results),
+        "calculations": calculations,
+        "results": results
+            }
+    
