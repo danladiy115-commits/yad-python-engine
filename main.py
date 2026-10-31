@@ -636,4 +636,40 @@ async def map_upload(
             "mapping. It does not change uploaded documents."
         )
         }
-                
+                 
+# ==========================================
+# AI-POWERED DOCUMENT ANALYSIS
+# ==========================================
+
+@app.post("/api/ai/analyze")
+async def ai_analyze_document(
+    file: UploadFile = File(...)
+):
+    filename = file.filename or "document.docx"
+
+    if not filename.lower().endswith(".docx"):
+        raise HTTPException(
+            415,
+            "AI analysis currently supports DOCX files only."
+        )
+
+    data = await read_upload(file)
+
+    try:
+        report = analyze_document_with_ai(
+            data,
+            filename
+        )
+
+        return {
+            "service": "yad-python-engine",
+            "operation": "ai_document_analysis",
+            "documents_modified": False,
+            "result": report
+        }
+
+    except Exception as error:
+        raise HTTPException(
+            500,
+            detail=str(error)
+        )
