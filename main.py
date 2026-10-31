@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from docx import Document
 from calculations import calculate_rsa
 from mapper import analyze_docx_mapping
+from ai_mapper import analyze_document_with_ai
 
 import fitz
 import io
