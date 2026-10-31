@@ -5,15 +5,17 @@ from pydantic import BaseModel
 from docx import Document
 from calculations import calculate_rsa
 from mapper import analyze_docx_mapping
+
 import fitz
 import io
 import zipfile
 import base64
 import binascii
 
+
 app = FastAPI(
     title="YAD Documents Corrector Python Engine",
-    version="0.3.0"
+    version="0.4.0"
 )
 
 app.add_middleware(
@@ -27,6 +29,10 @@ app.add_middleware(
 MAX_FILE_SIZE = 25 * 1024 * 1024
 MAX_BATCH_FILES = 30
 
+
+# ==========================================
+# BASIC ROUTES
+# ==========================================
 
 @app.get("/")
 def root():
@@ -64,6 +70,10 @@ async def read_upload(upload):
 
     return data
 
+
+# ==========================================
+# SINGLE DOCUMENT ANALYSIS
+# ==========================================
 
 @app.post("/api/analyze")
 async def analyze_document(
@@ -137,6 +147,10 @@ async def analyze_document(
         )
 
 
+# ==========================================
+# ZIP CHECK
+# ==========================================
+
 @app.post("/api/zip/check")
 async def check_zip(
     file: UploadFile = File(...)
@@ -178,6 +192,10 @@ async def check_zip(
         )
 
 
+# ==========================================
+# CALCULATION ENGINE
+# ==========================================
+
 class CalculationRequest(BaseModel):
     rsa_balance: str
     dob: str
@@ -204,6 +222,10 @@ def calculate_documents(
             detail=str(error)
         )
 
+
+# ==========================================
+# BATCH REQUEST MODELS
+# ==========================================
 
 class BatchDocument(BaseModel):
     name: str
@@ -268,6 +290,10 @@ def decode_batch_documents(documents):
     return decoded
 
 
+# ==========================================
+# BATCH DOCUMENT ANALYSIS
+# ==========================================
+
 @app.post("/api/analyze/batch")
 def analyze_batch(
     request: BatchAnalysisRequest
@@ -293,12 +319,9 @@ def analyze_batch(
                 results.append({
                     "filename": name,
                     "file_type": "docx",
-                    "word_count": sum(
-                        len(x["contexts"][0].split())
-                        for x in report["candidates"]
-                        if x["contexts"]
-                    ),
-                    "text_preview": "",
+                    "paragraphs_examined": report[
+                        "paragraphs_examined"
+                    ],
                     "status": report["status"],
                     "mapping_report": report
                 })
@@ -329,8 +352,8 @@ def analyze_batch(
                         else "needs_ocr"
                     ),
                     "message": (
-                        "PDF text extraction only; "
-                        "OCR for scanned pages is not yet enabled."
+                        "PDF text extraction only. "
+                        "OCR is not yet enabled."
                     )
                 })
 
@@ -356,6 +379,10 @@ def analyze_batch(
         "results": results
     }
 
+
+# ==========================================
+# BASE64 CONTEXTUAL MAPPING
+# ==========================================
 
 @app.post("/api/map/batch")
 def map_batch(
@@ -409,5 +436,203 @@ def map_batch(
     }
 
 
-# Correction is intentionally not wired to the mapping stage yet.
-# We will enable replacement only after mapping is validated.
+# ==========================================
+# NEW: DIRECT FILE UPLOAD MAPPING
+# ==========================================
+
+@app.post("/api/map/upload")
+async def map_upload(
+    files: list[UploadFile] = File(...)
+):
+
+    if not files:
+        raise HTTPException(
+            400,
+            "Please select documents."
+        )
+
+    documents = []
+    additional_files = []
+
+    uploaded_size = 0
+    extracted_size = 0
+
+    for upload in files:
+
+        filename = upload.filename or "unnamed"
+        raw = await upload.read()
+
+        if not raw:
+            raise HTTPException(
+                400,
+                f"Empty file: {filename}"
+            )
+
+        uploaded_size += len(raw)
+
+        if uploaded_size > MAX_FILE_SIZE:
+            raise HTTPException(
+                413,
+                "Combined uploaded files exceed 25 MB."
+            )
+
+        lower_name = filename.lower()
+
+        # DIRECT WORD DOCUMENT
+        if lower_name.endswith(".docx"):
+
+            documents.append((
+                filename.split("/")[-1],
+                raw
+            ))
+
+        # ZIP CONTAINING WORD DOCUMENTS
+        elif lower_name.endswith(".zip"):
+
+            try:
+
+                with zipfile.ZipFile(
+                    io.BytesIO(raw),
+                    "r"
+                ) as archive:
+
+                    for item in archive.infolist():
+
+                        if item.is_dir():
+                            continue
+
+                        if not item.filename.lower().endswith(
+                            ".docx"
+                        ):
+                            continue
+
+                        if len(documents) >= MAX_BATCH_FILES:
+                            raise HTTPException(
+                                413,
+                                "Maximum 30 documents per batch."
+                            )
+
+                        if item.file_size > MAX_FILE_SIZE:
+                            raise HTTPException(
+                                413,
+                                "An extracted document exceeds 25 MB."
+                            )
+
+                        extracted_size += item.file_size
+
+                        if extracted_size > MAX_FILE_SIZE:
+                            raise HTTPException(
+                                413,
+                                "Combined extracted documents exceed 25 MB."
+                            )
+
+                        document_data = archive.read(item)
+
+                        documents.append((
+                            item.filename.split("/")[-1],
+                            document_data
+                        ))
+
+            except zipfile.BadZipFile:
+
+                raise HTTPException(
+                    400,
+                    f"Invalid ZIP file: {filename}"
+                )
+
+        # PDF EXTRACTION ONLY
+        elif lower_name.endswith(".pdf"):
+
+            try:
+
+                pdf = fitz.open(
+                    stream=raw,
+                    filetype="pdf"
+                )
+
+                extracted_text = "\n".join(
+                    page.get_text("text")
+                    for page in pdf
+                )
+
+                additional_files.append({
+                    "filename": filename,
+                    "status": (
+                        "text_extracted_not_mapped"
+                        if extracted_text.strip()
+                        else "needs_ocr"
+                    ),
+                    "page_count": len(pdf),
+                    "message": (
+                        "PDF text extraction is available, "
+                        "but PDF contextual mapping and OCR "
+                        "are not yet enabled."
+                    )
+                })
+
+            except Exception:
+
+                additional_files.append({
+                    "filename": filename,
+                    "status": "failed",
+                    "message": "Could not read this PDF."
+                })
+
+        else:
+
+            additional_files.append({
+                "filename": filename,
+                "status": "unsupported",
+                "message": (
+                    "Supported uploads are DOCX, ZIP and PDF."
+                )
+            })
+
+        if len(documents) > MAX_BATCH_FILES:
+            raise HTTPException(
+                413,
+                "Maximum 30 documents per batch."
+            )
+
+    if not documents:
+
+        raise HTTPException(
+            400,
+            "No supported Word documents were found."
+        )
+
+    results = []
+
+    for name, data in documents:
+
+        try:
+
+            report = analyze_docx_mapping(
+                data,
+                name
+            )
+
+            results.append(report)
+
+        except Exception as error:
+
+            results.append({
+                "filename": name,
+                "status": "failed",
+                "message": str(error)
+            })
+
+    return {
+        "service": "yad-python-engine",
+        "version": app.version,
+        "operation": "direct_upload_contextual_mapping",
+        "documents_modified": False,
+        "document_count": len(results),
+        "results": results,
+        "additional_files": additional_files,
+        "notice": (
+            "This endpoint performs read-only contextual "
+            "mapping. It does not change uploaded documents."
+        )
+        }
+                
